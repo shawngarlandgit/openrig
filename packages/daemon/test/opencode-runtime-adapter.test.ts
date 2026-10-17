@@ -9,6 +9,7 @@ import nodeFs from "node:fs";
 import nodeOs from "node:os";
 import nodePath from "node:path";
 import Database from "better-sqlite3";
+import { ResumeMetadataRefresher } from "../src/domain/resume-metadata-refresher.js";
 import { describe, it, expect, vi } from "vitest";
 import type { TmuxAdapter, TmuxResult } from "../src/adapters/tmux.js";
 import {
@@ -21,7 +22,7 @@ import { OpencodeResumeAdapter, assessOpencodeResumeProbe } from "../src/adapter
 import { opencodePostureFlag } from "../src/adapters/yolo-mode.js";
 import { observeOpencodeApproval } from "../src/domain/permission-drift.js";
 import { validateResumeToken, resumeTypeForRuntime } from "../src/domain/resume-token-validation.js";
-import { verifyOpencodeRuntimeAvailable } from "../src/domain/rigspec-preflight.js";
+import { verifyOpencodeRuntimeAvailable, verifyOpencodeSeatCwdsDistinct } from "../src/domain/rigspec-preflight.js";
 
 const SESSION = "devopencode-a@some-rig";
 const SESSION_ID = "ses_f3bb408d9ffeA9wfnyVhkcmv6C";
@@ -485,5 +486,38 @@ describe("opencode capture and preflight", () => {
     );
     expect(missing.length).toBe(1);
     expect(missing[0]).toMatch(/opencode.*--version.*failed/);
+  });
+});
+
+describe("opencode resume token fill after the first turn", () => {
+  const registry = () => ({ updateResumeToken: vi.fn(() => true), isForkClaimingHeldToken: vi.fn(() => false), markResumeProbeResult: vi.fn() });
+  const session = (over: Record<string, unknown> = {}) => ({
+    sessionId: "s1", sessionName: "asg-res@asg-mirror", runtime: "opencode", resumeType: null, resumeToken: null,
+    cwd: "/work/research", createdAt: "2026-10-17 20:19:06", ...over,
+  });
+
+  it("fills the token from the seat's own directory, bounded by its launch time", async () => {
+    const reg = registry();
+    const readSessionIdForCwd = vi.fn(async () => ({ ok: true as const, sessionId: "ses_mine" }));
+    const r = new ResumeMetadataRefresher({ sessionRegistry: reg as never, tmuxAdapter: {} as never, opencodeSessionStore: { readSessionIdForCwd } });
+    await r.refresh([session()], { fillNullOnly: true });
+    expect(readSessionIdForCwd).toHaveBeenCalledWith("/work/research", Date.parse("2026-10-17T20:19:06Z"));
+    expect(reg.updateResumeToken).toHaveBeenCalledWith("s1", "opencode_session_id", "ses_mine", "scrape");
+  });
+
+  it("leaves the token empty when no conversation exists yet, and never replaces a present one", async () => {
+    const reg = registry();
+    const readSessionIdForCwd = vi.fn(async () => ({ ok: false as const, reason: "missing_sidecar" }));
+    const r = new ResumeMetadataRefresher({ sessionRegistry: reg as never, tmuxAdapter: {} as never, opencodeSessionStore: { readSessionIdForCwd } });
+    await r.refresh([session(), session({ sessionId: "s2", resumeToken: "ses_kept", resumeType: "opencode_session_id" })], { fillNullOnly: true });
+    expect(readSessionIdForCwd).toHaveBeenCalledTimes(1);
+    expect(reg.updateResumeToken).not.toHaveBeenCalled();
+  });
+
+  it("preflight refuses two opencode seats sharing a cwd", async () => {
+    const { verifyOpencodeSeatCwdsDistinct } = await import("../src/domain/rigspec-preflight.js");
+    const spec = (cwds: string[]) => ({ pods: [{ id: "p", members: cwds.map((cwd, i) => ({ id: `m${i}`, runtime: "opencode", cwd })) }] }) as never;
+    expect(verifyOpencodeSeatCwdsDistinct(spec(["/a", "/b"]))).toEqual([]);
+    expect(verifyOpencodeSeatCwdsDistinct(spec(["/a", "/a/"]))[0]).toContain("p.m0, p.m1 share cwd");
   });
 });

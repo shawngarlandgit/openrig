@@ -472,7 +472,7 @@ directory's `CLAUDE.md`, including blocks written by other rigs.
 
 `runtime: opencode` types `opencode <cwd> [--model <provider/model>] [--auto]` into the seat's pane. Resume uses the exact session id (`--session <id>`), never `--continue`.
 
-- **Session identity:** the resume token is the `ses_*` id read from `opencode.db`, filtered by the seat's cwd and the launch time. Give each OpenCode seat its own `cwd`; two seats in one directory can't be told apart.
+- **Session identity:** OpenCode writes its session row on the first prompt, so the resume token is filled after the first turn: the newest `ses_*` id in `opencode.db` for the seat's own cwd, created after that seat launched. Preflight refuses two OpenCode seats with the same `cwd`.
 - **Permissions:** without a full-bypass policy the seat launches with OpenCode's own rules; `builtin:yolo` adds `--auto`. Put per-seat rules in `env: { OPENCODE_CONFIG_CONTENT: '{"permission": {...}}' }`. OpenCode applies inline config after any `opencode.json` in the working directory, so a seat can't loosen its own rules by writing one.
 - **Credentials:** OpenCode reads its own `auth.json` under its data directory; OpenRig passes no provider keys.
 

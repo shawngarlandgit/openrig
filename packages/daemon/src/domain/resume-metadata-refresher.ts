@@ -31,6 +31,8 @@ export interface ResumeRefreshSession {
   resumeType: string | null;
   resumeToken: string | null;
   cwd?: string | null;
+  /** SQLite UTC launch time of the OpenRig session row ("YYYY-MM-DD HH:MM:SS"). */
+  createdAt?: string | null;
 }
 
 interface ResumeMetadataRefresherDeps {
@@ -56,6 +58,9 @@ interface ResumeMetadataRefresherDeps {
   /** Provider root used by the daemon's Claude launches; no scan of other homes. */
   claudeConfigDir?: string;
   listClaudeProcesses?: NativeProcessLister;
+  /** OpenCode writes its session row on the first prompt, so its token is filled here, not at launch.
+   *  Reads only the seat's own directory, only rows created after this launch. */
+  opencodeSessionStore?: { readSessionIdForCwd(cwd: string | null, minTimeCreatedMs?: number | null): Promise<{ ok: true; sessionId: string } | { ok: false; reason: string }> };
 }
 
 export class ResumeMetadataRefresher {
@@ -71,6 +76,7 @@ export class ResumeMetadataRefresher {
   private sleep: (ms: number) => Promise<void>;
   private homeDir: string;
   private contextUsageStore: ResumeMetadataRefresherDeps["contextUsageStore"] | null;
+  private opencodeSessionStore: ResumeMetadataRefresherDeps["opencodeSessionStore"] | null;
   private claudeProcessStartedAt: ResumeMetadataRefresherDeps["claudeProcessStartedAt"] | null;
   private claudeConfigDir: string;
   private listClaudeProcesses: NativeProcessLister | undefined;
@@ -98,6 +104,7 @@ export class ResumeMetadataRefresher {
     this.sleep = deps.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.homeDir = deps.homeDir ?? os.homedir();
     this.contextUsageStore = deps.contextUsageStore ?? null;
+    this.opencodeSessionStore = deps.opencodeSessionStore ?? null;
     this.claudeProcessStartedAt = deps.claudeProcessStartedAt ?? null;
     this.claudeConfigDir = deps.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? nodePath.join(this.homeDir, ".claude");
     this.listClaudeProcesses = deps.listClaudeProcesses;
@@ -143,6 +150,17 @@ export class ResumeMetadataRefresher {
     const captureOpts = { attempts: fillNullOnly ? 1 : undefined, listProcesses: opts?.listProcesses };
     for (const session of sessions) {
       if (this.stopped.signal.aborted) return;
+      if (session.runtime === "opencode") {
+        if (!session.resumeToken && session.cwd && this.opencodeSessionStore) {
+          const launchedMs = session.createdAt ? Date.parse(`${session.createdAt.replace(" ", "T")}Z`) : NaN;
+          const read = await this.opencodeSessionStore.readSessionIdForCwd(session.cwd, Number.isFinite(launchedMs) ? launchedMs : null);
+          const id = read.ok ? read.sessionId : null;
+          if (id && !this.sessionRegistry.isForkClaimingHeldToken(session.sessionId, "opencode_session_id", id)) {
+            this.sessionRegistry.updateResumeToken(session.sessionId, "opencode_session_id", id, "scrape");
+          }
+        }
+        continue;
+      }
       if (session.runtime === "codex") {
         const sessionCaptureOpts = { ...captureOpts, sessionId: session.sessionId };
         if (session.resumeToken) {

@@ -409,6 +409,7 @@ export async function preflightValidatedSpec(rigSpec: PodRigSpec, preflightCtx: 
     errors.push(...piErrors);
     errors.push(...await verifyOmpRuntimeAvailable(rigSpec, preflightCtx.exec));
     errors.push(...await verifyOpencodeRuntimeAvailable(rigSpec, preflightCtx.exec));
+    errors.push(...verifyOpencodeSeatCwdsDistinct(rigSpec));
   }
 
   // §6 RECONCILIATION — WARNING EMISSION ORDER (PM ruling 2026-08-05): ACTIVITY-HOOK-FIRST,
@@ -475,6 +476,21 @@ export async function verifyOmpRuntimeAvailable(rigSpec: PodRigSpec, exec: ExecF
     if (timedOut) return [timedOut];
     return [`Runtime "omp" not available ('omp --version' failed: ${runtimeProbeFailure(err)}). If OMP is not installed, install Oh My Pi and ensure 'omp' is on PATH.`];
   }
+}
+
+/** OpenCode keys conversations by directory, so a seat finds its own session only when no other
+ *  OpenCode seat in the rig shares its cwd. */
+export function verifyOpencodeSeatCwdsDistinct(rigSpec: PodRigSpec): string[] {
+  const bySeat = new Map<string, string[]>();
+  for (const pod of rigSpec.pods) {
+    for (const member of pod.members) {
+      if (member.runtime !== "opencode") continue;
+      const key = (member.cwd ?? ".").replace(/\/+$/, "") || "/";
+      bySeat.set(key, [...(bySeat.get(key) ?? []), `${pod.id}.${member.id}`]);
+    }
+  }
+  return [...bySeat.entries()].filter(([, seats]) => seats.length > 1).map(([cwd, seats]) =>
+    `OpenCode seats ${seats.join(", ")} share cwd "${cwd}". OpenCode identifies a seat's conversation by directory, so restore could attach the wrong one. Give each OpenCode seat its own cwd.`);
 }
 
 /** Probe only OpenCode seats. */
