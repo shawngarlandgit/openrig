@@ -81,6 +81,17 @@ export function piTrust(
   return yoloEnabled(env, resolvedPosture) ? "approve" : configured ?? "no-approve";
 }
 
+/** OpenCode approval posture: YOLO / a resolved full_bypass selects ` --auto`
+ *  (auto-approve permissions that are not explicitly denied); otherwise no flag.
+ *  Per-seat allow/deny rules come from OPENCODE_CONFIG_CONTENT in the seat env,
+ *  which outranks any opencode.json the agent could write into its own cwd. */
+export function opencodePostureFlag(
+  env: NodeJS.ProcessEnv = process.env,
+  resolvedPosture?: ResolvedLaunchPosture,
+): string {
+  return yoloEnabled(env, resolvedPosture) ? " --auto" : "";
+}
+
 /**
  * OPR.0.5.3.1 — Claude classic-renderer launch env prefix.
  *
